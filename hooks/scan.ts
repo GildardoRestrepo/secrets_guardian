@@ -77,13 +77,14 @@ const RULES: Rule[] = [
   },
   {
     // uint8_t appKey[] = { 0x2B, 0x7E, ... }  (RadioLib / LMIC)
+    // #define LORAWAN_APP_KEY 0x2B, 0x7E, ...
     kind: 'llave LoRaWAN (bytes)',
-    re: /\b(?:app_?s?key|nwk_?s?key|nwk_?key|app_?key)\w*\s*(?:\[\s*\d*\s*\])?\s*=\s*\{\s*(0x[0-9a-f]{2}(?:\s*,\s*0x[0-9a-f]{2}){7,})/i,
+    re: /\b\w*?(?:app_?s?key|nwk_?s?key|nwk_?key|app_?key)\w*\s*(?:\[\s*\d*\s*\])?\s*(?:=\s*)?\{?\s*(0x[0-9a-f]{2}(?:\s*,\s*0x[0-9a-f]{2}){7,})/i,
     placeholderCheck: 1,
   },
   {
     kind: 'llave LoRaWAN (hex)',
-    re: /\b(?:app_?s?key|nwk_?s?key|nwk_?key|app_?key)\w*\W{1,6}["']?([0-9a-f]{32})\b/i,
+    re: /\b\w*?(?:app_?s?key|nwk_?s?key|nwk_?key|app_?key)\w*\W{1,6}["']?([0-9a-f]{32})\b/i,
     placeholderCheck: 1,
   },
   {
@@ -131,7 +132,7 @@ export function scanDiff(diff: string): Finding[] {
   let line = 0
   for (const raw of diff.split('\n')) {
     if (raw.startsWith('+++ ')) {
-      file = raw.slice(4).replace(/^b\//, '').trim()
+      file = raw.slice(4).trim().replace(/^"(.*)"$/, '$1').replace(/^b\//, '')
       continue
     }
     if (raw.startsWith('--- ')) continue
@@ -165,4 +166,49 @@ export function formatFindings(findings: Finding[], max = 10): string {
   const lines = findings.slice(0, max).map(f => `  - ${f.file}:${f.line} — ${f.kind} (${f.preview})`)
   if (findings.length > max) lines.push(`  - …y ${findings.length - max} más`)
   return lines.join('\n')
+}
+
+/** Archivo, en la raíz del repo, con las rutas donde un secreto es intencional. */
+export const ALLOW_FILE = '.secret-guard-allow'
+
+function globToRegExp(glob: string): RegExp {
+  let g = glob.replace(/\\/g, '/').replace(/^\.?\//, '')
+  // Como en .gitignore: con "/" al inicio o en medio, la ruta es desde la raíz del repo.
+  const anchored = g.replace(/\/$/, '').includes('/') || glob.startsWith('/')
+  if (g.endsWith('/')) g += '**'
+  let re = ''
+  for (let i = 0; i < g.length; i++) {
+    const c = g[i] ?? ''
+    if (c === '*' && g[i + 1] === '*') {
+      if (g[i + 2] === '/') {
+        re += '(?:.*/)?'
+        i += 2
+      } else {
+        re += '.*'
+        i += 1
+      }
+    } else if (c === '*') re += '[^/]*'
+    else if (c === '?') re += '[^/]'
+    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+  }
+  return new RegExp(anchored ? `^${re}$` : `(?:^|/)${re}$`)
+}
+
+/** Lee .secret-guard-allow: una ruta o patrón por línea, estilo .gitignore (sin "!"). */
+export function parseAllowList(text: string): (path: string) => boolean {
+  const patterns = text
+    .split(/\r?\n/)
+    .map(l => l.replace(/(^|\s)#.*$/, '').trim())
+    .filter(Boolean)
+    .map(globToRegExp)
+  return path => {
+    const p = path.replace(/\\/g, '/').replace(/^\.\//, '')
+    return patterns.some(re => re.test(p))
+  }
+}
+
+export function withoutAllowed(findings: Finding[], allowText: string | undefined): Finding[] {
+  if (!allowText) return findings
+  const isAllowed = parseAllowList(allowText)
+  return findings.filter(f => !isAllowed(f.file))
 }

@@ -3,12 +3,21 @@
 // Uso: node check.ts pre-commit   |   node check.ts pre-push  (refs por stdin)
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { formatFindings, scanDiff, type Finding } from '../hooks/scan.ts'
+import { join } from 'node:path'
+import { ALLOW_FILE, formatFindings, scanDiff, withoutAllowed, type Finding } from '../hooks/scan.ts'
 
 const ZERO = /^0+$/
 
 function git(args: string[]): string {
-  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+  return execFileSync('git', ['-c', 'core.quotePath=false', ...args], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+}
+
+function allowList(): string | undefined {
+  try {
+    return readFileSync(join(git(['rev-parse', '--show-toplevel']).trim(), ALLOW_FILE), 'utf8')
+  } catch {
+    return undefined // el repo no tiene lista de permitidos
+  }
 }
 
 function preCommit(): Finding[] {
@@ -29,7 +38,7 @@ function prePush(): Finding[] {
 }
 
 const mode = process.argv[2]
-const findings = mode === 'pre-push' ? prePush() : preCommit()
+const findings = withoutAllowed(mode === 'pre-push' ? prePush() : preCommit(), allowList())
 
 if (findings.length > 0) {
   const what = mode === 'pre-push' ? 'push' : 'commit'
@@ -39,6 +48,7 @@ if (findings.length > 0) {
 Qué hacer:
   - Mueve el valor a un archivo ignorado (secrets.h, .env) o a una variable de entorno y deja un placeholder.
   - Falso positivo: agrega el comentario  secret-guard: allow  en esa línea.
+  - Secreto versionado a propósito por el equipo: agrega la ruta a ${ALLOW_FILE} en la raíz del repo.
   - Si estás seguro y quieres saltarte la revisión una vez:  git ${what} --no-verify
 `)
   process.exit(1)

@@ -1,10 +1,27 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { formatFindings, parseGitAction, scanDiff, scanFile, type Finding, type GitAction } from './scan'
+import {
+  ALLOW_FILE,
+  formatFindings,
+  parseGitAction,
+  scanDiff,
+  scanFile,
+  withoutAllowed,
+  type Finding,
+  type GitAction,
+} from './scan'
 
 const MAX_UNTRACKED_BYTES = 512 * 1024
 
 async function git($: EngineInterface, args: string[], cwd?: string) {
-  return $.process.run(['git', ...args], { cwd, timeoutMs: 60_000 })
+  return $.process.run(['git', '-c', 'core.quotePath=false', ...args], { cwd, timeoutMs: 60_000 })
+}
+
+async function readAllowList($: EngineInterface, top: string): Promise<string | undefined> {
+  try {
+    return await $.fs.read(`${top}/${ALLOW_FILE}`)
+  } catch {
+    return undefined // el repo no tiene lista de permitidos
+  }
 }
 
 /** Busca secretos en lo que el comando git va a guardar o publicar. */
@@ -27,7 +44,8 @@ async function collectFindings($: EngineInterface, action: GitAction): Promise<F
       const unstaged = await git($, ['diff', '--no-color', '--no-ext-diff'], action.cwd)
       if (unstaged.exitCode === 0) found.push(...scanDiff(unstaged.stdout))
 
-      const others = await git($, ['ls-files', '--others', '--exclude-standard', '-z'], action.cwd)
+      // Desde la raíz, para que las rutas sean relativas a ella.
+      const others = await git($, ['ls-files', '--others', '--exclude-standard', '-z'], top)
       for (const rel of others.stdout.split('\0').filter(Boolean)) {
         try {
           const content = await $.fs.read(`${top}/${rel}`, { length: MAX_UNTRACKED_BYTES })
@@ -41,7 +59,7 @@ async function collectFindings($: EngineInterface, action: GitAction): Promise<F
   }
 
   const seen = new Set<string>()
-  return found.filter(f => {
+  return withoutAllowed(found, await readAllowList($, top)).filter(f => {
     const key = `${f.file}:${f.line}:${f.kind}`
     if (seen.has(key)) return false
     seen.add(key)
@@ -61,6 +79,7 @@ function denyMessage(action: GitAction, findings: Finding[]): string {
       ? '  2. Si ya quedó en un commit, hay que reescribir ese commit antes de hacer push (y rotar la credencial si ya se publicó antes).'
       : '  2. Sacarlo del área de preparación (git restore --staged <archivo>) si no debía ir.',
     '  3. Si es un falso positivo, la persona puede confirmarlo; entonces se agrega el comentario `secret-guard: allow` en esa línea.',
+    `  4. Si el equipo decidió versionar ese secreto a propósito, la persona puede agregar la ruta a ${ALLOW_FILE} en la raíz del repo.`,
     'No reintentes el mismo comando sin cambiar nada ni intentes esquivar el guardián: pregúntale a la persona.',
   ].join('\n')
 }

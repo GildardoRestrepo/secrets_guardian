@@ -19,6 +19,18 @@ Solo mira líneas agregadas, ignora placeholders (`""`, `YOUR_...`, `xxxx`, llav
 
 **Falso positivo:** agrega el comentario `secret-guard: allow` en esa línea.
 
+**Secretos versionados a propósito** (por ejemplo, llaves LoRaWAN que el equipo decidió guardar en el repo): crea un archivo `.secret-guard-allow` en la raíz del repo con las rutas permitidas, una por línea, estilo `.gitignore`:
+
+```
+# comentarios con #
+01_firmware/nodes/          # una carpeta (desde la raíz del repo)
+docs/nodos/*.md             # un patrón
+secrets.example.h           # sin "/" vale en cualquier carpeta
+**/examples/                # cualquier carpeta llamada examples
+```
+
+Lo respetan tanto el mod como los hooks de git.
+
 ## Instalar el mod de Claude
 
 En una sesión de terminal de Claude Code:

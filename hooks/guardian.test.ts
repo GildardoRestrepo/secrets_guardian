@@ -1,5 +1,5 @@
 import { describe, expect, test, type TestBody } from 'claude-code/testing'
-import { parseGitAction, scanDiff, scanLine } from './scan'
+import { parseAllowList, parseGitAction, scanDiff, scanLine, withoutAllowed } from './scan'
 
 // Valores inventados para las pruebas: no son credenciales reales.
 const FAKE_WIFI = 'Invernadero#2026!' // secret-guard: allow
@@ -76,8 +76,8 @@ describe('hook sobre git', () => {
     })
     on('process.run', async (_, e) => {
       const args = e.argv.slice(1).join(' ')
-      if (args.startsWith('rev-parse')) return ok('C:/repo\n')
-      if (args.startsWith('diff --cached')) return ok(stagedDiff)
+      if (args.includes('rev-parse')) return ok('C:/repo\n')
+      if (args.includes('diff --cached')) return ok(stagedDiff)
       return ok('')
     })
   }
@@ -116,5 +116,78 @@ describe('hook sobre git', () => {
     expect(ran).toBe(2)
     expect(toasts).toEqual([])
     expect(toasts).toEqual([])
+  })
+})
+
+describe('llaves LoRaWAN en firmware', () => {
+  test('detecta #define LORAWAN_APP_KEY con bytes y respeta llaves en cero', async () => {
+    const real = '#define LORAWAN_APP_KEY 0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD2, 0xA6, 0xAB, 0xF7, 0x15, 0x88, 0x09, 0xCF, 0x4F, 0x3C' // secret-guard: allow
+    const zero = '#define LORAWAN_NWK_KEY 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00'
+    expect(scanLine(real)?.kind).toBe('llave LoRaWAN (bytes)')
+    expect(scanLine(zero)).toBeUndefined()
+    expect(scanLine('| AppKey | `2b7e151628aed2a6abf7158809cf4f3c` |')?.kind).toBe('llave LoRaWAN (hex)') // secret-guard: allow
+  })
+})
+
+describe('.secret-guard-allow', () => {
+  const allow = parseAllowList(
+    [
+      '# credenciales versionadas a propósito',
+      '01_firmware/nodes/',
+      '00_docs/03_nodes_cards/*.md',
+      'secrets.example.h   # en cualquier carpeta',
+      '**/examples/',
+    ].join('\n'),
+  )
+
+  test('carpetas, globs, nombres sueltos y **', async () => {
+    expect(allow('01_firmware/nodes/bigos.h')).toBe(true)
+    expect(allow('01_firmware/nodes/sub/x.h')).toBe(true)
+    expect(allow('00_docs/03_nodes_cards/bigos.md')).toBe(true)
+    expect(allow('00_docs/03_nodes_cards/sub/bigos.md')).toBe(false)
+    expect(allow('a/b/secrets.example.h')).toBe(true)
+    expect(allow('01_firmware/lib/X/examples/Demo/Demo.ino')).toBe(true)
+    expect(allow('01_firmware/src/main.cpp')).toBe(false)
+    expect(allow('otro/01_firmware/nodes/bigos.h')).toBe(false)
+  })
+
+  test('sin archivo no filtra nada', async () => {
+    const f = [{ file: 'a.h', line: 1, kind: 'x', preview: 'y' }]
+    expect(withoutAllowed(f, undefined)).toEqual(f)
+    expect(withoutAllowed(f, '\n# vacío\n')).toEqual(f)
+    expect(withoutAllowed(f, 'a.h')).toEqual([])
+  })
+
+  test('el mod deja pasar un commit cuyo secreto está en una ruta permitida', async ($, on) => {
+    const nodeDiff = [
+      'diff --git a/01_firmware/nodes/bigos.h b/01_firmware/nodes/bigos.h',
+      '--- a/01_firmware/nodes/bigos.h',
+      '+++ b/01_firmware/nodes/bigos.h',
+      '@@ -5,0 +5,1 @@',
+      '+#define LORAWAN_APP_KEY 0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD2, 0xA6, 0xAB, 0xF7, 0x15, 0x88, 0x09, 0xCF, 0x4F, 0x3C', // secret-guard: allow
+    ].join('\n')
+    on('ui.status', async () => ({ value: undefined }))
+    on('ui.toast', async () => ({ value: undefined }))
+    on('process.run', async (_, e) => {
+      const args = e.argv.slice(1).join(' ')
+      const out = args.includes('rev-parse') ? 'C:/repo\n' : args.includes('diff --cached') ? nodeDiff : ''
+      return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    })
+    let allowText = ''
+    on('fs.read', async (_, e) =>
+      e.path.replace(/\\/g, '/').endsWith('/.secret-guard-allow') ? { value: allowText } : { deny: 'no existe' },
+    )
+    let ran = 0
+    on('tool.call', async () => {
+      ran++
+      return { result: { stdout: '', stderr: '', interrupted: false } }
+    })
+
+    const blocked = await $.tool.call({ tool: 'Bash', command: 'git commit -m "llaves bigos"' })
+    expect(blocked.deny ?? blocked.text ?? '').toContain('01_firmware/nodes/bigos.h:5')
+
+    allowText = '01_firmware/nodes/\n'
+    await $.tool.call({ tool: 'Bash', command: 'git commit -m "llaves bigos"' })
+    expect(ran).toBe(1)
   })
 })
