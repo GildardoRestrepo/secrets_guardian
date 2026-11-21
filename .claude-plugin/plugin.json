@@ -1,0 +1,7 @@
+{
+  "name": "guardian-secretos",
+  "version": "0.1.0",
+  "description": "Bloquea git commit/push cuando los cambios contienen contraseñas, llaves de API, tokens o llaves LoRaWAN.",
+  "author": { "name": "GildardoRestrepo" },
+  "license": "MIT"
+}

@@ -1,0 +1,17 @@
+#!/bin/sh
+# secrets_guardian: hook global de git (pre-commit).
+# Lo activa: git config --global core.hooksPath <esta carpeta>
+HOOK_DIR=$(cd "$(dirname "$0")" && pwd)
+
+if command -v node >/dev/null 2>&1; then
+  node --disable-warning=ExperimentalWarning "$HOOK_DIR/check.ts" pre-commit </dev/null || exit 1
+else
+  echo "⚠ secrets_guardian: no encontré node, así que este commit NO fue revisado." >&2
+fi
+
+# Encadenar con el hook propio del repo (core.hooksPath global lo taparía).
+LOCAL="$(git rev-parse --git-common-dir)/hooks/pre-commit"
+if [ -x "$LOCAL" ] && [ "$(cd "$(dirname "$LOCAL")" && pwd)" != "$HOOK_DIR" ]; then
+  "$LOCAL" "$@" || exit $?
+fi
+exit 0

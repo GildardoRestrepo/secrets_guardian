@@ -1,0 +1,6 @@
+{
+  "name": "secrets-guardian",
+  "owner": { "name": "GildardoRestrepo" },
+  "description": "Guardián de secretos para Claude Code y git.",
+  "plugins": [{ "name": "guardian-secretos", "source": "./" }]
+}
